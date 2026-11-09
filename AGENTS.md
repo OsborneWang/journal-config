@@ -33,6 +33,7 @@ bin/                  启动器（软链到 ~/.local/bin/）
   j                   主命令：采集 / 计划 / 日报 / 月报 / 查询
   j-board             看板渲染器（长驻，只读）
   j-pane              在当前窗口左侧插入/收起一块看板 pane（用 @journal 标记识别）
+  j-toggle            prefix X：fzf 多选切换计划项完成状态
   j-window            prefix J：跳到 journal 窗口并保证有看板
   j-capture           tmux 速记弹窗（bash + read -e）
   j-browse            fzf 浏览全部速记
@@ -97,6 +98,7 @@ check.sh / install.sh
 | 含义 | 打算做的事 | 干完但本来没排的事 | 流水 |
 | 前缀 | `+` | `!` | 无 |
 | 状态 | `[ ]`/`[x]`，会结转 | 永远已完成，不结转 | 无 |
+| 改状态 | `j done` / `prefix X` / `prefix e` | 不用改（要改就删行） | 永不改 |
 | 影响完成率 | 会 | 不会，单独统计 | 不会 |
 | 看板 | `○` / `✔` | `◆` | 底部条数 + 最新一条 |
 

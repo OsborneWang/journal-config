@@ -21,7 +21,7 @@ head2() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 head2 "1. 文件"
 for f in journal.py install.sh check.sh config.sh chat.md README.md AGENTS.md \
          prompts/distill.md prompts/report.md prompts/month.md \
-         bin/j bin/j-board bin/j-pane bin/j-window bin/j-capture bin/j-chat bin/j-browse bin/j-report-ui bin/j-month-ui \
+         bin/j bin/j-board bin/j-pane bin/j-window bin/j-toggle bin/j-capture bin/j-chat bin/j-browse bin/j-report-ui bin/j-month-ui \
          skills/journal/SKILL.md; do
 	[ -e "$repo_dir/$f" ] && ok "$f" || bad "缺少 $f"
 done
@@ -34,6 +34,7 @@ done
 bash -n "$repo_dir/bin/j-capture" && ok "j-capture 语法通过" || bad "j-capture 语法错误"
 bash -n "$repo_dir/bin/j-browse"  && ok "j-browse 语法通过"  || bad "j-browse 语法错误"
 bash -n "$repo_dir/bin/j-pane"    && ok "j-pane 语法通过"    || bad "j-pane 语法错误"
+bash -n "$repo_dir/bin/j-toggle"  && ok "j-toggle 语法通过"  || bad "j-toggle 语法错误"
 
 head2 "3. 安装状态（软链指向本仓库）"
 for f in "$repo_dir"/bin/*; do

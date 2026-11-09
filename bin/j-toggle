@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# j-toggle —— 用 fzf 勾选 / 取消勾选今日计划项（改 todo 状态最快的方式）
+#   Tab 或 空格 多选，回车切换；选中已完成的就是取消勾选。
+set -u
+J="$HOME/.local/bin/j"
+FZF=$(command -v fzf || echo /usr/bin/fzf)
+
+[ -x "$FZF" ] || { echo "没装 fzf" >&2; exit 1; }
+
+sel=$("$J" list 2>/dev/null) || { echo "今天的计划是空的" >&2; sleep 1; exit 0; }
+
+picked=$(printf '%s\n' "$sel" | "$FZF" --multi --reverse --height=100% \
+	--delimiter='\t' --with-nth=2.. \
+	--prompt='切换完成状态 › ' \
+	--header='Tab/空格 多选 · 回车切换 · 已完成的会被取消勾选 · q 退出' \
+	--bind='space:toggle+down')
+
+[ -z "${picked:-}" ] && exit 0
+
+while IFS=$'\t' read -r n _rest; do
+	[ -n "${n:-}" ] || continue
+	"$J" done "$n"
+done <<<"$picked"

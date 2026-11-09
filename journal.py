@@ -445,11 +445,14 @@ def cmd_capture(text: str, ai: bool) -> int:
     d = date.today()
     # 开头的符号决定去向，决定权永远在你手里：
     #   +  → 计划项（待办，会结转）
+    #   -  → 切换某一项计划项的完成状态（后面跟编号或关键字）
     #   !  → 计划外完成（干完了、但本来没排的事）
     #   其他 → 速记，后台 AI 再判断是否影响计划
     mode = "note"
     if text.startswith(("+", "＋")):
         mode, text = "plan", text.lstrip("+＋ ").strip()
+    elif text.startswith(("-", "－", "—")):
+        mode, text = "toggle", text.lstrip("-－— ").strip()
     elif text.startswith(("!", "！")):
         mode, text = "extra", text.lstrip("!！ ").strip()
     if not text:
@@ -461,6 +464,21 @@ def cmd_capture(text: str, ai: bool) -> int:
         if mode == "plan":
             get_section(secs, "计划", create=True).append(render_task(text, 0, False))
             save_day(d, pre, secs, f"plan {d}: + {text[:50]}")
+        elif mode == "toggle":
+            body = get_section(secs, "计划")
+            items = plan_items(body)
+            hits = match_tasks(items, text)
+            if not hits:
+                print(f"计划里没找到「{text}」。j list 看看编号。", file=sys.stderr)
+                return 1
+            if len(hits) > 1:
+                print(f"「{text}」匹配到 {len(hits)} 项，用编号：", file=sys.stderr)
+                for i in hits:
+                    print(f"  {i + 1}. {items[i]['text']}", file=sys.stderr)
+                return 1
+            t = items[hits[0]]
+            body[t["line"]] = render_task(t["text"], t["carry"], not t["done"])
+            save_day(d, pre, secs, f"plan {d}: toggle {t['text'][:50]}")
         elif mode == "extra":
             get_section(secs, "计划外", create=True).append(f"- {datetime.now():%H:%M} {text}")
             save_day(d, pre, secs, f"extra {d}: {text[:50]}")
@@ -617,6 +635,26 @@ def cmd_plan(text: str) -> int:
         save_day(d, pre, secs, f"plan {d}: + {text[:50]}")
     print(f"+ {text}")
     return 0
+
+
+def cmd_list(rest) -> int:
+    """给 fzf 用：每行 `编号<TAB>○/✔ 文本`。--open 只看未完成。"""
+    only_open = "--open" in rest
+    d = date.today()
+    p, pre, secs = load_day(d)
+    if not p:
+        print("今天还没有文件。", file=sys.stderr)
+        return 1
+    items = plan_items(get_section(secs, "计划"))
+    n = 0
+    for i, t in enumerate(items, 1):
+        if only_open and t["done"]:
+            continue
+        mark = "✔" if t["done"] else "○"
+        tail = f"  ↺{t['carry']}" if (t["carry"] and not t["done"]) else ""
+        print(f"{i}\t{mark} {t['text']}{tail}")
+        n += 1
+    return 0 if n else 1
 
 
 def cmd_done(key: str) -> int:
@@ -1200,10 +1238,12 @@ HELP = f"""j — 个人日志 / 日报
   j <一句话>              记一笔速记（后台自动整理计划）
   j +<任务>               加进 todolist（待办，会结转）
   j !<一句话>             记一条「计划外完成」（干完但没排的事）
+  j -<编号|关键字>        切换某项 todo 的完成状态
   j -n <一句话>           记一笔，不动计划
   j plan <内容>           加一条计划项
   j done                  列出今日计划（带编号）
-  j done <编号|关键字>    切换完成状态
+  j done <编号|关键字>    切换完成状态（就是改 todo 状态的方式）
+  j list [--open]         列成 fzf 能吃的格式（给 j-toggle 用）
   j log [-n N]            今天的速记（默认最近 10 条）
   j log -a [YYYY-MM]      跨天看速记
   j search <词>...        跨天搜速记（多个词是 AND）
@@ -1233,6 +1273,8 @@ def main(argv) -> int:
         return cmd_plan(" ".join(rest))
     if cmd == "done":
         return cmd_done(" ".join(rest))
+    if cmd in ("list", "ls"):
+        return cmd_list(rest)
     if cmd == "report":
         return cmd_report(dry="--dry" in rest)
     if cmd == "month":
