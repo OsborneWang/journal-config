@@ -41,11 +41,24 @@ if [ -n "${existing:-}" ]; then
 fi
 
 prevw=$("$T" show-options -w -t "$win" -v main-pane-width 2>/dev/null || true)
-target=$(leftmost)
 new=$("$T" split-window -hb -l 26% -t "$win" -P -F '#{pane_id}' "exec $J_BOARD") || exit 1
 "$T" set-option -p -t "$new" @journal 1
 "$T" set-option -w -t "$win" @journal-prev-mainw "${prevw:-}"
-"$T" swap-pane -s "$new" -t "$target" >/dev/null 2>&1 || true
 "$T" set-option -w -t "$win" main-pane-width 26%
 "$T" select-layout -t "$win" main-vertical >/dev/null 2>&1 || true
+
+# after-split-window 钩子会重排布局，新 pane 常被甩到右边。
+# 这里先看自己排第几，不在最左就换过去，换完再排一次布局。
+idx_of() {
+	"$T" list-panes -t "$win" -F '#{pane_id} #{pane_index}' |
+		awk -v b="$new" '$1==b{print $2; exit}'
+}
+if [ "$(idx_of)" != "0" ]; then
+	target=$("$T" list-panes -t "$win" -F '#{pane_id} #{pane_index}' |
+		sort -k2 -n | head -1 | cut -d' ' -f1)
+	if [ -n "${target:-}" ] && [ "$target" != "$new" ]; then
+		"$T" swap-pane -s "$new" -t "$target" >/dev/null 2>&1 || true
+	fi
+	"$T" select-layout -t "$win" main-vertical >/dev/null 2>&1 || true
+fi
 "$T" select-pane -t "$new"

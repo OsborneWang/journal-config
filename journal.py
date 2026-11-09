@@ -999,6 +999,21 @@ def board_state(d: date | None = None):
     return st
 
 
+CLOCK_FMT = "%H:%M:%S"
+CLOCK_W = len("00:00:00")  # 8，纯 ASCII，正好和显示宽度一致
+
+
+def clock_anchor(w: int):
+    """时钟在贴图上的位置（1 基：行, 列）。太窄就不显示。"""
+    if w < CLOCK_W + 12:
+        return None
+    return 1, w - CLOCK_W + 1
+
+
+def clock_text() -> str:
+    return datetime.now().strftime(CLOCK_FMT)
+
+
 def rule(w: int) -> str:
     return C_FAINT + " " + "─" * max(1, w - 2) + C_R
 
@@ -1014,8 +1029,11 @@ def build_frame(w: int, h: int):
     cnt = f"{done}/{total}" if total else ""
     if st["extra"]:
         cnt = f"{cnt} +{len(st['extra'])}" if cnt else f"+{len(st['extra'])}"
-    gap = max(1, w - 2 - dw(head) - dw(cnt))
-    lines.append(" " + C_BOLD + head + C_R + " " * gap + C_DIM + cnt + C_R)
+    # 右端 8 列留给时钟（由主循环每秒原地重画，不进 frame，避免整屏重绘）
+    left_txt = head + (("  " + cnt) if cnt else "")
+    pad_n = max(1, w - 1 - dw(left_txt) - CLOCK_W)
+    lines.append(" " + C_BOLD + head + C_R + ((("  " + C_DIM + cnt + C_R) if cnt else ""))
+                 + " " * pad_n + " " * CLOCK_W)
     lines.append(rule(w))
 
     if not st["exists"] or (not st["plan"] and not st["extra"] and not st["notes"]):
@@ -1095,25 +1113,51 @@ def term_size():
 
 
 def _print_frame() -> int:
+    """--once：打一帧到 stdout（非交互，调试用）。"""
     w, h = term_size()
-    print("\n".join(l.replace("\033[K", "") for l in build_frame(w, h)))
+    lines = [l.replace("\033[K", "") for l in build_frame(w, h)]
+    if clock_anchor(w) and lines:
+        lines[0] = lines[0][: len(lines[0]) - CLOCK_W] + clock_text()
+    print("\n".join(lines))
     return 0
 
 
 def cmd_board(once: bool) -> int:
-    """只读看板：不接收键盘输入，只在文件变化或窗口尺寸变化时重绘。"""
+    """只读看板：不接收键盘输入。
+
+    两层刷新：
+      · 内容层 —— 文件 mtime 变、窗口尺寸变，才整帧重画（避免闪烁）
+      · 时钟层 —— 每秒只把右上角那 8 列原地重写，不动其它像素
+    """
     if once:
         return _print_frame()
+
+    state = {"resize": True}
 
     def on_winch(signum, frame):
         state["resize"] = True
 
-    state = {"resize": True}
     signal.signal(signal.SIGWINCH, on_winch)
     out = sys.stdout
     out.write("\033[?1049h\033[?25l")
     out.flush()
+
     last, last_sig = None, None
+    size = (0, 0)
+    drawn = {"sec": None}
+
+    def paint_clock(force=False):
+        nonlocal size
+        anchor = clock_anchor(size[0])
+        now = clock_text()
+        if not anchor or (now == drawn["sec"] and not force):
+            return
+        drawn["sec"] = now
+        row, col = anchor
+        # 写满最后一列会让光标进入“待折行”状态，末尾回一次原点清掉
+        out.write("\033[%d;%dH%s%s%s\033[H" % (row, col, C_DIM, now, C_R))
+        out.flush()
+
     try:
         while True:
             d = date.today()
@@ -1122,21 +1166,26 @@ def cmd_board(once: bool) -> int:
                 sig = (p.stat().st_mtime_ns, p.parent.stat().st_mtime_ns)
             except OSError:
                 sig = None
+
             if state["resize"] or sig != last_sig:
                 state["resize"] = False
                 last_sig = sig
-                w, h = term_size()
+                size = term_size()
                 try:
-                    frame = build_frame(w, h)
+                    frame = build_frame(*size)
                 except Exception:
                     import traceback
-                    frame = [" [38;5;203m看板渲染出错[0m "] + \
-                            [" " + l for l in traceback.format_exc().splitlines()[-6:]]
+                    frame = [" \033[38;5;203m看板渲染出错\033[0m "] + [
+                        " " + ln for ln in traceback.format_exc().splitlines()[-6:]
+                    ]
                 if frame != last:
                     last = frame
                     out.write("\033[H" + "\r\n".join(frame))
                     out.flush()
-            time.sleep(0.5)
+                    paint_clock(force=True)
+
+            paint_clock()
+            time.sleep(0.25)
     finally:
         out.write("\033[?25h\033[?1049l")
         out.flush()
