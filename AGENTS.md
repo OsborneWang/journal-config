@@ -133,6 +133,9 @@ cat ~/journal/.distill.log                   # 后台提炼的每次结果都在
   串行化（非阻塞排队，最多等 20 秒）。
 - **git 证据重复**：`/WorkSpace` 和 `/ShareSpace` 下有同一份代码的多份克隆，
   采集时按 commit hash 全局去重。
+- **别用工具自己的环境变量名当局部变量**：脚本里把变量叫 `TMUX` 会让 tmux CLI 连到
+  `/usr/bin/tmux` 这个"socket"，叫 `LESS` 会被 less 当成默认选项解析。
+  已经踩过两次（`T=`、`PAGER_BIN=`）。同理别用 `EDITOR`、`PAGER`、`HOME`。
 - **pi 调用要隔离**：`pi -p --no-session --no-tools --no-skills --no-prompt-templates
   --no-context-files --no-extensions`，否则会加载用户全部扩展，慢且不可控。
   还要显式 `--thinking`（用户全局设的是 high，会把 2 秒的调用拖成 13 秒）。
