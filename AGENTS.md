@@ -19,7 +19,7 @@ tmux 里左边一块常驻看板，右边干活。
 tmux respawn-pane -k -t <window>.0 'exec ~/.local/bin/j-board'
 ```
 
-看板有两种出现方式：`prefix J`（专门窗口）、`prefix B`（在当前窗口临时插一块，
+看板有两种出现方式：`prefix J`（专门窗口，`bin/j-window`）、`prefix B`（在当前窗口临时插一块，
 由 `bin/j-pane` 实现，靠 pane 选项 `@journal=1` 识别自己插的那块）。
 注意 `after-split-window` 钩子会把布局重排成 main-vertical，所以 `j-pane` 插完要
 `swap-pane` 到最左边再 `select-layout`；临时改过的 `main-pane-width` 记在
@@ -33,6 +33,7 @@ bin/                  启动器（软链到 ~/.local/bin/）
   j                   主命令：采集 / 计划 / 日报 / 月报 / 查询
   j-board             看板渲染器（长驻，只读）
   j-pane              在当前窗口左侧插入/收起一块看板 pane（用 @journal 标记识别）
+  j-window            prefix J：跳到 journal 窗口并保证有看板
   j-capture           tmux 速记弹窗（bash + read -e）
   j-browse            fzf 浏览全部速记
   j-chat              临时 pi 会话，把话变成记录

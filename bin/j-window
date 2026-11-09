@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# j-window —— 打开（或跳转到）日志窗口，并保证左边有一块看板。
+# 对应 tmux 的 prefix J。
+set -u
+T=$(command -v tmux || echo /usr/bin/tmux)
+
+win=$("$T" list-windows -F '#{window_id} #{window_name}' 2>/dev/null | awk '$2=="journal"{print $1; exit}')
+if [ -z "${win:-}" ]; then
+	"$T" new-window -n journal >/dev/null || exit 1
+	win=$("$T" display -p -t journal '#{window_id}')
+	"$T" set-option -w -t "$win" main-pane-width 26%
+fi
+
+"$T" select-window -t "$win"
+
+has_board=$("$T" list-panes -t "$win" -F '#{@journal}' 2>/dev/null | grep -cx 1)
+if [ "${has_board:-0}" = "0" ]; then
+	"$HOME/.local/bin/j-pane" "$win"
+else
+	board=$("$T" list-panes -t "$win" -F '#{pane_id} #{@journal}' | awk '$2=="1"{print $1; exit}')
+	"$T" select-pane -t "$board" 2>/dev/null || true
+fi
