@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# j-pane —— 在当前窗口左侧放入 / 收起看板 pane。
+# 不改动任何已有 pane 的内容（不会杀掉你的 yazi / pi / shell）。
+#
+#   j-pane              在当前窗口切换（由 window_id 自动推断）
+#   j-pane @12          tmux 里用：明确指定窗口（bind 里传 #{window_id}）
+set -u
+T=$(command -v tmux || echo /usr/bin/tmux)   # 别叫 TMUX：那会覆盖 tmux 自己的 socket 变量
+J_BOARD="$HOME/.local/bin/j-board"
+
+win=${1:-}
+if [ -z "$win" ]; then
+	win=$("$T" display -p '#{window_id}' 2>/dev/null) || {
+		echo "不在 tmux 里，或者没有指定窗口" >&2
+		exit 1
+	}
+fi
+
+pane_of() { # 本窗口里标记为看板的 pane id
+	"$T" list-panes -t "$win" -F '#{pane_id} #{@journal}' 2>/dev/null |
+		awk '$2=="1"{print $1; exit}'
+}
+
+leftmost() {
+	"$T" list-panes -t "$win" -F '#{pane_id} #{pane_index}' |
+		sort -k2 -n | head -1 | cut -d' ' -f1
+}
+
+existing=$(pane_of)
+if [ -n "${existing:-}" ]; then
+	"$T" kill-pane -t "$existing"
+	# 还原这个窗口原来的主窗格宽度
+	prev=$("$T" show-options -w -t "$win" -v '@journal-prev-mainw' 2>/dev/null || true)
+	if [ -n "${prev:-}" ]; then
+		"$T" set-option -w -t "$win" main-pane-width "$prev"
+	elif [ -n "$("$T" show-options -w -t "$win" -v main-pane-width 2>/dev/null || true)" ]; then
+		"$T" set-option -w -t "$win" -u main-pane-width
+	fi
+	"$T" select-layout -t "$win" main-vertical >/dev/null 2>&1 || true
+	exit 0
+fi
+
+prevw=$("$T" show-options -w -t "$win" -v main-pane-width 2>/dev/null || true)
+target=$(leftmost)
+new=$("$T" split-window -hb -l 26% -t "$win" -P -F '#{pane_id}' "exec $J_BOARD") || exit 1
+"$T" set-option -p -t "$new" @journal 1
+"$T" set-option -w -t "$win" @journal-prev-mainw "${prevw:-}"
+"$T" swap-pane -s "$new" -t "$target" >/dev/null 2>&1 || true
+"$T" set-option -w -t "$win" main-pane-width 26%
+"$T" select-layout -t "$win" main-vertical >/dev/null 2>&1 || true
+"$T" select-pane -t "$new"
