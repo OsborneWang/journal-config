@@ -36,13 +36,19 @@ prompts/              三个提示词，AI 的全部行为都靠它
   report.md           当日材料 → 日报三段
   month.md            当月材料 + 统计 → 月报四段
 config.sh             配置（模型、仓库根、开关）。改这里不用动代码
+                      ★ 本机私有的值（自己的 git 邮箱、本机专有路径）不要写进 config.sh，
+                        写 ~/.config/journal/config.local.sh（已 gitignore，会覆盖同名项）
 chat.md               临时 pi 会话的系统提示
 skills/journal/       给普通 pi 会话用的 skill（软链到 ~/.pi/agent/skills/）
 README.md             给用户看的说明书（软链到 ~/.config/journal/）
 check.sh / install.sh
 ```
 
-**不在本仓库**的两块：数据在 `~/journal`；tmux 键位和窗口布局在 `~/tmux-config/tmux.conf`。
+**不在本仓库**的三块：数据在 `~/journal`；tmux 键位和窗口布局在 `~/tmux-config/tmux.conf`；
+本机私有配置在 `~/.config/journal/config.local.sh`。
+
+**这个仓库是公开的**（github.com/OsborneWang/journal-config）。提交前别把个人邮箱、
+内网地址、公司项目名写进来；配置里需要的话走 `config.local.sh`。
 
 ## 数据
 

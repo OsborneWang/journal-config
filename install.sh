@@ -81,6 +81,10 @@ install_one "$repo_dir/config.sh"      "$HOME/.config/journal/config.sh"
 install_one "$repo_dir/chat.md"        "$HOME/.config/journal/chat.md"
 install_one "$repo_dir/prompts"        "$HOME/.config/journal/prompts"
 install_one "$repo_dir/README.md"      "$HOME/.config/journal/README.md"
+if [ ! -f "$HOME/.config/journal/config.local.sh" ]; then
+	echo '  提示: 本机私有设置（自己的邮箱、只在本机存在的路径）写到'
+	echo '        ~/.config/journal/config.local.sh，它不会进仓库'
+fi
 
 echo "[3/3] pi skill"
 install_one "$repo_dir/skills/journal/SKILL.md" "$HOME/.pi/agent/skills/journal/SKILL.md"

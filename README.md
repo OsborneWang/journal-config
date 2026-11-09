@@ -9,6 +9,7 @@
     bin/                         j / j-board / j-capture / j-browse / j-chat / …
     prompts/                     distill / report / month 三个提示词
     config.sh                    配置（模型、仓库根、开关）
+                                 · 本机私有的值写到 ~/.config/journal/config.local.sh
     chat.md                      日志助手（popup 里的临时 pi）的系统提示
     skills/journal/              给普通 pi 会话用的 skill
     install.sh                   装到 ~/.local/bin 与 ~/.config/journal

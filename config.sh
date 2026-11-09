@@ -19,7 +19,8 @@ J_AI_CAPTURE=1
 J_REPO_ROOTS="/WorkSpace /ShareSpace"
 
 # 机器视角里 git 提交按作者过滤（留空 = 不过滤）
-J_GIT_AUTHOR="wangxubo.work@outlook.com"
+# 本机自己的邮箱别写在这里（这是公开仓库），写进 ~/.config/journal/config.local.sh
+J_GIT_AUTHOR=""
 
 # 思考档位（off/low/medium/high）。速记整理用 off 求快，报告用 low
 J_THINK_CAPTURE="off"

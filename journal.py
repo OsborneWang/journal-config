@@ -37,9 +37,12 @@ DEFAULTS = {
 
 
 def load_config() -> dict:
+    """config.sh（仓库里的默认值）→ config.local.sh（本机私有，不进仓库）→ 环境变量。"""
     cfg = dict(DEFAULTS)
-    p = CFG_DIR / "config.sh"
-    if p.exists():
+    for name in ("config.sh", "config.local.sh"):
+        p = CFG_DIR / name
+        if not p.exists():
+            continue
         for line in p.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
