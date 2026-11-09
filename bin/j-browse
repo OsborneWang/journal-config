@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# 速记浏览：全库平铺 + fzf 模糊搜索，右侧预览当天完整记录，回车用 nvim 打开那天
+set -u
+J="$HOME/.local/bin/j"
+sel=$("$J" notes | /usr/bin/fzf --reverse --height=100% --delimiter=' ' --nth=3.. \
+  --prompt='速记 › ' \
+  --header='输关键词过滤（只匹配正文）· 回车用 nvim 打开那天 · q 退出' \
+  --preview "$J day {1}" --preview-window='right,58%,wrap')
+[ -z "${sel}" ] && exit 0
+d=${sel%% *}
+exec /usr/bin/nvim "$HOME/journal/${d:0:4}/${d:5:2}/$d.md"

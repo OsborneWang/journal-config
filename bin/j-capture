@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# tmux 速记弹窗：一行，回车即走
+# read -e 走 readline：中文按退格删一个字、^H 和 DEL 都能删、方向键可用
+set -u
+DIM='\033[38;5;244m'; GREEN='\033[38;5;108m'; VIOLET='\033[38;5;141m'; CYAN='\033[38;5;73m'; R='\033[0m'
+printf '\n %b记一笔 · 回车保存 / Ctrl-C 取消%b\n %b+ 待办%b  %b! 计划外完成%b  %b不带符号 = 流水%b\n %b›%b ' \
+  "$DIM" "$R" "$GREEN" "$R" "$VIOLET" "$R" "$DIM" "$R" "$CYAN" "$R"
+IFS= read -e -r line || exit 0
+case "${line//[[:space:]]/}" in "") exit 0;; esac
+"$HOME/.local/bin/j" "$line"

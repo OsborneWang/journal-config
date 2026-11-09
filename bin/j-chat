@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# tmux 里的临时 pi 会话：把话变成 journal 里的记录，聊完即退
+set -u
+exec "$HOME/.local/bin/pi" --no-session \
+  --append-system-prompt "$(cat "$HOME/.config/journal/chat.md")"

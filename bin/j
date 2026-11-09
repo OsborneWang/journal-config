@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+import os
+import sys
+
+for _c in (os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+           os.path.expanduser("~/journal-config")):
+    if os.path.exists(os.path.join(_c, "journal.py")):
+        sys.path.insert(0, _c)
+        break
+
+import journal  # noqa: E402
+
+if __name__ == "__main__":
+    try:
+        sys.exit(journal.main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(130)

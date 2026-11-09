@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# tmux 日报弹窗
+set -u
+"$HOME/.local/bin/j" report
+rc=$?
+printf '\n\033[38;5;244m%s\033[0m' "$([ $rc -eq 0 ] && echo '已写入今日文件 · 回车关闭' || echo '出错 · 回车关闭')"
+read -r _ || true
