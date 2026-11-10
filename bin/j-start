@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# 开工视图（popup 里用）：看完按任意键关闭
+set -u
+"$HOME/.local/bin/j" start
+printf '\n\033[38;5;244m  [其他键] 关闭\033[0m'
+read -rsn1 _ || true
+printf '\n'

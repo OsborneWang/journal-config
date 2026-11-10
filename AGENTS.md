@@ -35,6 +35,12 @@ bin/                  启动器（软链到 ~/.local/bin/）
   j-pane              在当前窗口左侧插入/收起一块看板 pane（用 @journal 标记识别）
   j-toggle            prefix X：fzf 多选切换计划项完成状态
   j-window            prefix J：跳到 journal 窗口并保证有看板
+  j-toggle            prefix X：fzf 管理计划（切换/改名/删除/衍生）
+  j-act               j-toggle 里 fzf 动作的分发器（按选中行调用 j 子命令）
+  j-start             prefix R：开工视图
+  j-week-ui           prefix W：周报弹窗
+tests/smoke.sh        41 项离线回归。**改完代码必须跑**，2 秒
+eval/run.py           提示词评测。换模型/改提示词必须跑
   j-capture           tmux 速记弹窗（bash + read -e）
   j-browse            fzf 浏览全部速记
   j-chat              临时 pi 会话，把话变成记录
@@ -79,6 +85,11 @@ check.sh / install.sh
 
 ## 不变量（改之前先看，破了就是 bug）
 
+0. **「今天」是逻辑日，不是日历日。** 一天从 `J_DAY_START`（默认 04:00）算起，
+   凌晨 1 点记的东西属于前一天。所有取日期的地方都用 `today()`，
+   **不要直接写 `date.today()`**；需要挂钟日期用 `real_today()`，
+   需要当前时刻用 `_now()`（它支持 `J_FAKE_NOW` 便于测试）。
+
 1. **速记只追加，任何代码和 AI 都不许改写已有速记的文字。**
 2. **AI 的输出只落进固定槽位**：`## 计划` 的勾选/新增、`## 计划外`、`## 总结`。
    它永远不写速记、不改已有计划项的文字。
@@ -90,6 +101,12 @@ check.sh / install.sh
 6. **采集永不阻塞**：速记先落盘，再后台 `pi -p` 提炼。API 挂了那一条的提炼丢掉，但原文还在。
 7. **判定只看最新一条速记**。曾经把「最近 3 条」一起丢给模型重判，导致旧速记被反复判、
    凭空多出假产出（「开了个站会」被反复判成一条完成项）。不要再改回去。
+
+## 结转标记的坑
+
+只认 `[↺3]` 这种方括号形式（`CARRY_RE`）。早期用过 ` ↺3` 裸格式，后来废弃了：
+正文如果以「↺3」结尾，会被误吃成结转次数（真实踩过）。
+**改标记格式要同时改 `parse_task` / `render_task` / `tests/smoke.sh` 第 4 组。**
 
 ## 三种记录，别混
 
@@ -113,6 +130,8 @@ check.sh / install.sh
 ## 验证方式
 
 ```sh
+./tests/smoke.sh                             # 41 项离线回归，2 秒，改完必跑
+./eval/run.py                                # 提示词评测（调模型）
 ./check.sh                                   # 全流程自检，用临时目录
 JOURNAL_DIR=$(mktemp -d) ~/.local/bin/j show  # 手动隔离试验
 COLUMNS=54 LINES=24 ~/.local/bin/j board --once   # 看一眼看板（非交互）

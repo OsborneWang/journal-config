@@ -25,3 +25,12 @@ J_GIT_AUTHOR=""
 # 思考档位（off/low/medium/high）。速记整理用 off 求快，报告用 low
 J_THINK_CAPTURE="off"
 J_THINK_REPORT="low"
+
+# 一天从几点开始算（凌晨写日志的人设成 04:00，避免熬夜的记录跑到第二天）
+J_DAY_START="04:00"
+
+# 备份：git bundle 存到哪、留几份；J_BACKUP_REMOTE 填了才能 --push
+# 远端建议用私有仓库（日志含工作细节，别用公开仓库）
+J_BACKUP_DIR="$HOME/journal-backups"
+J_BACKUP_KEEP="7"
+J_BACKUP_REMOTE=""

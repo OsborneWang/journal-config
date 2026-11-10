@@ -7,13 +7,15 @@
 └─ ~/journal-config/             本仓库 = 安装源（所有文件都是软链出去的）
     journal.py                   全部实现，单文件、零第三方依赖
     bin/                         j / j-board / j-capture / j-browse / j-chat / …
-    prompts/                     distill / report / month 三个提示词
+    prompts/                     distill / report / week / month 四个提示词
     config.sh                    配置（模型、仓库根、开关）
                                  · 本机私有的值写到 ~/.config/journal/config.local.sh
     chat.md                      日志助手（popup 里的临时 pi）的系统提示
     skills/journal/              给普通 pi 会话用的 skill
     install.sh                   装到 ~/.local/bin 与 ~/.config/journal
-    check.sh                     自检（用临时目录，不碰真实数据）
+    check.sh                     自检（安装 + 冒烟 + 离线回归）
+    tests/smoke.sh               41 项离线回归（2 秒，不调模型）
+    eval/                        提示词评测用例与 runner
     AGENTS.md                    给 agent 看的：架构、不变量、已知坑
 ```
 
@@ -41,9 +43,11 @@ AI 只在两处出现，且都是**无状态一次性调用**（`pi -p`）：
 | `Space` | **记一笔**（主入口，任何窗口可用；原 next-layout 让位）<br>`+`=待办　`!`=计划外完成　不带符号=流水 |
 | `a` | 日志助手：临时起一个 pi，把话变成记录，聊完即退 |
 | `S` | 生成今日总结（一天可以多次，每次追加一条带时间的总结） |
+| `W` | 生成本周周报 |
 | `M` | 生成本月月报 |
 | `e` | nvim 直接改今天的文件 |
-| `X` | **勾选 / 取消勾选 todo**（fzf 多选，Tab 选多个，回车切换） |
+| `X` | **管理 todo**：回车切换完成 · `C-R` 改名 · `C-D` 删除 · `C-P` 从计划外衍生待办 |
+| `R` | **开工视图**：上次没做完的 + 上次定的明日计划 + 今天现状 |
 | `L` | 浏览 / 搜索全部速记（fzf，右边预览当天，回车 nvim 打开那天） |
 | `Y` | yazi 弹窗（取代被看板占掉的左栏） |
 | `J` | 跳转 / 新建日志窗口，并保证左边有看板 |
@@ -94,11 +98,51 @@ j search <词>...        跨天搜速记，多个词是 AND
 j day [YYYY-MM-DD]      打印某一天整篇
 j show                  打印今天整篇
 j edit                  用 $EDITOR 打开今天
+j status                今天概况 + AI 整理状态
+j start                 开工视图（上次没做完的 + 今天的现状）
 j report [--dry]        生成今日总结
+j week [2026-W45]       生成周报（默认本周）
+j month [YYYY-MM]       生成月报
+j undo [n] [--dry]      撤销最近 n 次写入（默认 1 次）
+j rm <序号> [--extra]   删掉一项计划（--extra 删计划外的）
+j rename <序号> [新名]  改一项的文字
+j promote <序号> [文本] 从「计划外」衍生一条待办
+j backup [--push]       给数据做 git bundle 快照（可顺带推私有远端）
 j month [YYYY-MM]       生成月报
 j path                  今天文件路径
 j distill               立刻跑一次计划整理
 j board [--once]        渲染看板（调试用）
+```
+
+## 一天的边界从凌晨 4 点算
+
+默认 `J_DAY_START="04:00"`：凌晨 0:00–3:59 记的东西**仍算前一天**。
+
+为什么：晚上 11 点开始写日志、写到 1 点，那时的记录属于"今天"而不是"明天"。
+没有这个设置，熬夜写的所有内容会跑到新的一天，还得手工搬。
+
+处在跨夜时段时，看板会显示 `·跨夜`，时钟变黄，提醒你现在的记录算在哪一天。
+时间戳仍然写挂钟时间（`- 01:20 ...`），所以文件里能看出真实时刻。
+
+## 备份（别省这一步）
+
+数据在 `~/journal`，只有本地 git。**git 只防手滑，不防磁盘坏**。
+
+```sh
+j backup              # 打一个 git bundle 到 ~/journal-backups/，自动校验 + 只留最近 7 份
+j backup --push       # 同时推到你配的私有远端（config.local.sh 里设 J_BACKUP_REMOTE）
+```
+
+从 bundle 恢复：
+
+```sh
+git clone ~/journal-backups/journal-20261110-083000.bundle ~/journal
+```
+
+建议直接挂定时任务（数据是隐私内容，远端务必用**私有**仓库）：
+
+```cron
+30 22 * * * /home/osborne/.local/bin/j backup --push
 ```
 
 ## 三种记录（别混）
@@ -166,6 +210,17 @@ j board [--once]        渲染看板（调试用）
 | `J_AI_CAPTURE` | `0` = 永不在速记后动计划 |
 | `J_THINK_CAPTURE` / `J_THINK_REPORT` | 思考档位，提速用 |
 | `J_REPO_ROOTS` / `J_GIT_AUTHOR` | 机器视角的范围 |
+
+## 改完怎么验
+
+```sh
+./tests/smoke.sh        # 41 项离线回归，2 秒，不碰真实数据、不调模型
+./eval/run.py           # 提示词评测（5 个用例，会调模型）
+./check.sh              # 安装 + 冒烟；./check.sh --model 连评测一起跑
+```
+
+`tests/smoke.sh` 覆盖：逻辑日、前缀语义、边界输入、结转、编辑、撤销、查询、渲染（35 种尺寸）、备份、并发、脏数据。
+`eval/run.py` 防的是「换了模型之后 AI 行为悄悄变差」——这类退化不会报错，只会让你的日报慢慢变得不对味。
 
 ## 怎么改这个工具
 

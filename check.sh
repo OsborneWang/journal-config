@@ -20,9 +20,10 @@ head2() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 head2 "1. 文件"
 for f in journal.py install.sh check.sh config.sh chat.md README.md AGENTS.md \
-         prompts/distill.md prompts/report.md prompts/month.md \
-         bin/j bin/j-board bin/j-pane bin/j-window bin/j-toggle bin/j-capture bin/j-chat bin/j-browse bin/j-report-ui bin/j-month-ui \
-         skills/journal/SKILL.md; do
+         prompts/distill.md prompts/report.md prompts/month.md prompts/week.md \
+         bin/j bin/j-board bin/j-pane bin/j-window bin/j-toggle bin/j-act bin/j-start \
+         bin/j-capture bin/j-chat bin/j-browse bin/j-report-ui bin/j-month-ui \
+         eval/run.py tests/smoke.sh skills/journal/SKILL.md; do
 	[ -e "$repo_dir/$f" ] && ok "$f" || bad "缺少 $f"
 done
 
@@ -78,11 +79,26 @@ if echo "$out" | grep -q "↺"; then ok "看板显示结转 ↺"; else echo "  �
 head2 "4b. 结转标记（回归）"
 python3 -c "import sys,os; sys.path.insert(0, os.environ['REPO']); import journal as J; assert J.parse_task('- [ ] 正文末尾 ↺3')['carry']==0; assert J.parse_task('- [ ] 任务 [↺4]')['carry']==4; assert J.render_task('任务',4,False)=='- [ ] 任务 [↺4]'; assert J.render_task('任务',0,True)=='- [x] 任务'" && ok "正文里的 ↺3 不吃正文、[↺n] 正常" || bad "结转标记解析"
 
+head2 "4c. 离线回归（tests/smoke.sh）"
+if "$repo_dir/tests/smoke.sh" >/tmp/check-smoke.$$ 2>&1; then
+	ok "$(tail -1 /tmp/check-smoke.$$ | sed 's/\x1b\[[0-9;]*m//g')"
+else
+	bad "tests/smoke.sh 有失败项"
+	sed 's/^/     /' /tmp/check-smoke.$$ | tail -20
+fi
+rm -f /tmp/check-smoke.$$
+
 head2 "5. 模型（可选）"
 if [ "$with_model" = 1 ]; then
 	out=$("$J" distill 2>&1)
 	grep -qE "\[[0-9:]+\]" <<<"$out" && ok "distill 有日志输出" || bad "distill 无日志"
-	echo "     $out" | tail -2
+	if "$repo_dir/eval/run.py" >/tmp/check-eval.$$ 2>&1; then
+		ok "$(tail -1 /tmp/check-eval.$$)"
+	else
+		bad "提示词评测有失败"
+		sed 's/^/     /' /tmp/check-eval.$$ | tail -20
+	fi
+	rm -f /tmp/check-eval.$$
 else
 	echo "  跳过（--model 开启）"
 fi

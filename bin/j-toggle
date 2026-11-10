@@ -1,23 +1,34 @@
 #!/usr/bin/env bash
-# j-toggle —— 用 fzf 勾选 / 取消勾选今日计划项（改 todo 状态最快的方式）
-#   Tab 或 空格 多选，回车切换；选中已完成的就是取消勾选。
+# j-toggle —— 一个 fzf 界面管理今日计划（改状态 / 改名 / 删除 / 从计划外衍生待办）
+#
+#   回车 / 空格  切换完成状态（计划外的不受影响）
+#   Ctrl-R       改名
+#   Ctrl-D       删除
+#   Ctrl-P       从「计划外」衍生一条待办
 set -u
 J="$HOME/.local/bin/j"
+ACT="$HOME/.local/bin/j-act"
 FZF=$(command -v fzf || echo /usr/bin/fzf)
 
-[ -x "$FZF" ] || { echo "没装 fzf" >&2; exit 1; }
+[ -x "$FZF" ] || { echo "没装 fzf" >&2; sleep 1; exit 1; }
 
-sel=$("$J" list 2>/dev/null) || { echo "今天的计划是空的" >&2; sleep 1; exit 0; }
+list() { "$J" list 2>/dev/null; }
+[ -n "$(list)" ] || { echo "今天的计划是空的" >&2; sleep 1; exit 0; }
 
-picked=$(printf '%s\n' "$sel" | "$FZF" --multi --reverse --height=100% \
-	--delimiter='\t' --with-nth=2.. \
-	--prompt='切换完成状态 › ' \
-	--header='Tab/空格 多选 · 回车切换 · 已完成的会被取消勾选 · q 退出' \
-	--bind='space:toggle+down')
+RELOAD="reload($ACT list 2>/dev/null || $J list)"
+
+picked=$(list | "$FZF" --multi --reverse --height=100% \
+	--delimiter='\t' --with-nth=3.. \
+	--prompt='今日计划 › ' \
+	--header='回车/空格=切换完成 · C-R=改名 · C-D=删除 · C-P=从计划外衍生待办 · q=退出' \
+	--bind "space:toggle+down" \
+	--bind "ctrl-r:execute($ACT rename {1} {2})+reload($J list)" \
+	--bind "ctrl-d:execute($ACT delete {1} {2})+reload($J list)" \
+	--bind "ctrl-p:execute($ACT promote {1} {2})+reload($J list)")
 
 [ -z "${picked:-}" ] && exit 0
 
-while IFS=$'\t' read -r n _rest; do
-	[ -n "${n:-}" ] || continue
-	"$J" done "$n"
+while IFS=$'\t' read -r typ idx _rest; do
+	[ -n "${typ:-}" ] || continue
+	"$ACT" toggle "$typ" "$idx"
 done <<<"$picked"

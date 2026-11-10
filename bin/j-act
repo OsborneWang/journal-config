@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# j-toggle 的 fzf 动作分发：j-act <toggle|rename|delete|promote> <p|e> <序号>
+set -u
+J="$HOME/.local/bin/j"
+act=${1:-}; typ=${2:-p}; idx=${3:-}
+[ -n "${idx:-}" ] || exit 1
+extra=""
+[ "$typ" = "e" ] && extra="--extra"
+case "$act" in
+	toggle)  [ "$typ" = "p" ] && "$J" done "$idx" ;;
+	rename)  "$J" rename "$idx" $extra ;;
+	delete)  "$J" rm "$idx" $extra ;;
+	promote) [ "$typ" = "e" ] && "$J" promote "$idx" ;;
+esac

@@ -33,6 +33,10 @@ DEFAULTS = {
     "J_AI_CAPTURE": "1",
     "J_REPO_ROOTS": "/WorkSpace /ShareSpace",
     "J_GIT_AUTHOR": "",
+    "J_DAY_START": "04:00",
+    "J_BACKUP_DIR": str(HOME / "journal-backups"),
+    "J_BACKUP_REMOTE": "",
+    "J_BACKUP_KEEP": "7",
 }
 
 
@@ -60,6 +64,47 @@ def load_config() -> dict:
 
 CFG = load_config()
 ROOT = Path(CFG["JOURNAL_DIR"])
+
+
+# ------------------------------------------------------------------ 时间与「今天」
+# 一天从 J_DAY_START（默认 04:00）算起：凌晨 1 点记的东西仍属于前一天，
+# 这样熬夜写完的日志不会莫名其妙跑到第二天去。
+# 测试用 J_FAKE_NOW=2026-11-10T01:20:00 可以把「现在」钉死。
+
+
+def _now() -> datetime:
+    fake = os.environ.get("J_FAKE_NOW")
+    if fake:
+        try:
+            return datetime.fromisoformat(fake)
+        except ValueError:
+            pass
+    return datetime.now()
+
+
+def day_start_offset() -> timedelta:
+    raw = str(CFG.get("J_DAY_START", "00:00")).strip()
+    try:
+        h, m = (int(x) for x in raw.split(":")[:2])
+    except Exception:
+        return timedelta(0)
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return timedelta(0)
+    return timedelta(hours=h, minutes=m)
+
+
+def today() -> date:
+    """逻辑上的「今天」。"""
+    return (_now() - day_start_offset()).date()
+
+
+def real_today() -> date:
+    """挂钟上的今天，用来判断是否处在跨夜时段。"""
+    return _now().date()
+
+
+def is_late_night() -> bool:
+    return real_today() != today()
 
 
 # ---------------------------------------------------------------- 文件与行解析
@@ -171,10 +216,10 @@ EXTRA_RE = re.compile(r"^\s*- (\d{1,2}:\d{2})?\s*(.+)$")
 def extra_items(body):
     """## 计划外 区块：干完的事，不进计划、不参与结转和完成率。"""
     out = []
-    for ln in body or []:
+    for i, ln in enumerate(body or []):
         m = EXTRA_RE.match(ln)
         if m:
-            out.append({"time": m.group(1) or "", "text": m.group(2).strip()})
+            out.append({"time": m.group(1) or "", "text": m.group(2).strip(), "line": i})
     return out
 
 
@@ -427,6 +472,47 @@ def machine_view(since: str, until: str) -> str:
 # ------------------------------------------------------------------- 采集
 
 
+STATE_FILE = "distill.state"
+
+
+def save_distill_state(**kw) -> None:
+    try:
+        data = {"ts": _now().isoformat(timespec="seconds")}
+        data.update(kw)
+        (ROOT / STATE_FILE).write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def load_distill_state() -> dict:
+    try:
+        return json.loads((ROOT / STATE_FILE).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def distill_status_text():
+    """给看板用的一句话状态，返回 (文本, 颜色)。"""
+    st = load_distill_state()
+    if not st.get("ts"):
+        return "", ""
+    try:
+        ago = (_now() - datetime.fromisoformat(st["ts"])).total_seconds()
+    except Exception:
+        return "", ""
+    if st.get("ok") is False:
+        return "AI 失败", C_YEL
+    if ago < 90:
+        when = "刚刚"
+    elif ago < 3600:
+        when = f"{int(ago // 60)} 分钟前"
+    else:
+        when = f"{int(ago // 3600)} 小时前"
+    return f"AI {when}", C_FAINT
+
+
 def spawn_distill() -> None:
     try:
         log = open(ROOT / ".distill.log", "a")
@@ -444,7 +530,7 @@ def cmd_capture(text: str, ai: bool) -> int:
     if not text:
         print("空内容，什么都没记。", file=sys.stderr)
         return 1
-    d = date.today()
+    d = today()
     # 开头的符号决定去向，决定权永远在你手里：
     #   +  → 计划项（待办，会结转）
     #   -  → 切换某一项计划项的完成状态（后面跟编号或关键字）
@@ -482,10 +568,10 @@ def cmd_capture(text: str, ai: bool) -> int:
             body[t["line"]] = render_task(t["text"], t["carry"], not t["done"])
             save_day(d, pre, secs, f"plan {d}: toggle {t['text'][:50]}")
         elif mode == "extra":
-            get_section(secs, "计划外", create=True).append(f"- {datetime.now():%H:%M} {text}")
+            get_section(secs, "计划外", create=True).append(f"- {_now():%H:%M} {text}")
             save_day(d, pre, secs, f"extra {d}: {text[:50]}")
         else:
-            get_section(secs, "速记", create=True).append(f"- {datetime.now():%H:%M} {text}")
+            get_section(secs, "速记", create=True).append(f"- {_now():%H:%M} {text}")
             save_day(d, pre, secs, f"note {d}: {text[:50]}")
     if ai and mode == "note" and CFG.get("J_AI_CAPTURE", "1") == "1":
         spawn_distill()
@@ -519,7 +605,7 @@ def cmd_distill() -> int:
 
 
 def _distill_locked() -> int:
-    d = date.today()
+    d = today()
     p, pre, secs = load_day(d)
     if not p:
         return 0
@@ -550,8 +636,9 @@ def _distill_locked() -> int:
                       thinking=CFG.get("J_THINK_CAPTURE", "off"))
     except Exception as e:
         print(f"[distill] 跳过：{e}", file=sys.stderr)
+        save_distill_state(ok=False, error=str(e)[:300])
         return 0
-    stamp = f"{datetime.now():%H:%M:%S}"
+    stamp = f"{_now():%H:%M:%S}"
     ops = extract_json(out)
     if not ops:
         print(f"[{stamp}] 无法解析，忽略：{out[:200]}", file=sys.stderr)
@@ -606,9 +693,11 @@ def _distill_locked() -> int:
     if changed:
         for c in changed:
             print(f"[{stamp}] {c}", file=sys.stderr)
+        save_distill_state(ok=True, applied=changed)
     else:
         raw = " ".join(out.split())[:120]
         print(f"[{stamp}] 无变化 · 模型返回 {raw}", file=sys.stderr)
+        save_distill_state(ok=True, applied=[])
     return 0
 
 
@@ -629,7 +718,7 @@ def cmd_plan(text: str) -> int:
     if not text:
         print("用法: j plan <任务内容>", file=sys.stderr)
         return 1
-    d = date.today()
+    d = today()
     with Lock():
         ensure_today(d)
         p, pre, secs = load_day(d)
@@ -639,28 +728,298 @@ def cmd_plan(text: str) -> int:
     return 0
 
 
+def _git(*args, timeout=20):
+    return subprocess.run(["git", "-C", str(ROOT), *args],
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def cmd_undo(rest) -> int:
+    """撤销最近 n 次写入（默认 1 次）。每次写入都是独立 commit，所以撤得很干净。"""
+    dry = "--dry" in rest
+    nums = [a for a in rest if a.isdigit()]
+    n = max(1, int(nums[0])) if nums else 1
+    if not (ROOT / ".git").exists():
+        print("数据目录不是 git 仓库，无法撤销。", file=sys.stderr)
+        return 1
+    if _git("status", "--porcelain").stdout.strip():
+        print("工作区有未提交的改动，先处理掉再撤销。", file=sys.stderr)
+        return 1
+    log = _git("log", "-n", str(n), "--pretty=%h %ad %s", "--date=format:%m-%d %H:%M")
+    commits = [ln for ln in log.stdout.splitlines() if ln.strip()]
+    if not commits:
+        print("没有可撤销的提交。", file=sys.stderr)
+        return 1
+    print(f"将撤销最近 {len(commits)} 次写入:" if not dry else f"将要撤销（dry-run）:")
+    for c in commits:
+        print("  " + c)
+    if dry:
+        return 0
+    rng = "HEAD" if n == 1 else f"HEAD~{n}..HEAD"
+    r = _git("revert", "--no-edit", rng, timeout=60)
+    if r.returncode != 0:
+        _git("revert", "--abort")
+        print(f"撤销失败（可能有冲突），已回滚到撤销前：\n{(r.stderr or '')[:400]}",
+              file=sys.stderr)
+        return 1
+    print("已撤销。用 j show 确认一下。")
+    return 0
+
+
+def cmd_backup(rest) -> int:
+    """给 ~/journal 做 git bundle 快照；配了 J_BACKUP_REMOTE 还能顺便推远端。"""
+    keep = 7
+    try:
+        keep = max(1, int(CFG.get("J_BACKUP_KEEP", "7")))
+    except Exception:
+        pass
+    bdir = Path(CFG["J_BACKUP_DIR"])
+    push = "--push" in rest
+    remote = CFG.get("J_BACKUP_REMOTE", "").strip()
+
+    if not (ROOT / ".git").exists():
+        print("数据目录不是 git 仓库，没法备份。", file=sys.stderr)
+        return 1
+    if not _git("rev-list", "--all", "--max-count=1").stdout.strip():
+        print("还没有任何记录，不用备份。")
+        return 0
+    bdir.mkdir(parents=True, exist_ok=True)
+    stamp = _now().strftime("%Y%m%d-%H%M%S")
+    name = bdir / f"journal-{stamp}.bundle"
+    if name.exists():  # 同一秒内多次备份，别互相覆盖
+        name = bdir / f"journal-{stamp}-{_now().strftime('%f')[:3]}.bundle"
+    r = subprocess.run(["git", "-C", str(ROOT), "bundle", "create", str(name), "--all"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"bundle 失败：{(r.stderr or '')[:300]}", file=sys.stderr)
+        return 1
+
+    # 校验一遍，别存个坏的
+    v = subprocess.run(["git", "-C", str(ROOT), "bundle", "verify", str(name)],
+                       capture_output=True, text=True)
+    ok = v.returncode == 0
+    size = name.stat().st_size
+    print(f"{'✓' if ok else '✗'} {name}（{size / 1024:.0f} KB）"
+          + ("" if ok else f"  校验失败：{v.stderr[:200]}"))
+    if not ok:
+        return 1
+
+    bundles = sorted(bdir.glob("journal-*.bundle"), key=lambda f: f.stat().st_mtime)
+    for old in bundles[:-keep]:
+        old.unlink()
+        print(f"  清掉旧备份 {old.name}")
+    print(f"  保留最近 {min(len(bundles), keep)} 份")
+
+    if push:
+        if not remote:
+            print("  没配 J_BACKUP_REMOTE，跳过推远端"
+                  "（在 config.local.sh 里设一个私有仓库地址即可）", file=sys.stderr)
+        else:
+            pr = subprocess.run(["git", "-C", str(ROOT), "push", remote, "--all"],
+                                capture_output=True, text=True, timeout=120)
+            if pr.returncode == 0:
+                print(f"  已推到 {remote}")
+            else:
+                print(f"  推远端失败：{(pr.stderr or '')[:300]}", file=sys.stderr)
+                return 1
+    return 0
+
+
+def cmd_start(rest) -> int:
+    """开工视图：上次没做完的 + 上次定下的明日计划 + 今天的现状。"""
+    d = today()
+    prev = [(dd, p) for dd, p in all_days() if dd < d]
+    print(f"{C_BOLD}今天 {d:%Y-%m-%d} {WEEKDAYS[d.weekday()]}{C_R}")
+    if is_late_night():
+        print(f"{C_YEL}（挂钟已过 0 点，仍记在前一天）{C_R}")
+
+    if prev:
+        dd, pp = prev[-1]
+        _, secs = split_sections(pp.read_text(encoding="utf-8"))
+        left = [t for t in plan_items(get_section(secs, "计划")) if not t["done"]]
+        print(f"\n{C_DIM}上次记录 {dd:%m-%d} {WEEKDAYS[dd.weekday()]}，没做完 {len(left)} 项{C_R}"
+              if left else f"\n{C_DIM}上次记录 {dd:%m-%d}，没有遗留{C_R}")
+        for t in left[:12]:
+            carry = f" {C_YEL}[↺{t['carry'] + 1}]{C_R}" if True else ""
+            print(f"  {C_CYAN}○{C_R} {t['text']}{carry}")
+        ss = summary_sections(secs)
+        if ss:
+            todo = subsection(ss[-1][1], "明日计划")
+            if todo:
+                print(f"{C_DIM}上次总结里定下的明日计划:{C_R}")
+                for t in todo[:6]:
+                    print(f"  {C_FAINT}·{C_R} {C_DIM}{t}{C_R}")
+    else:
+        print(f"\n{C_DIM}这是第一天，还没有历史记录{C_R}")
+
+    p, pre, secs = load_day(d)
+    plan = plan_items(get_section(secs, "计划")) if p else []
+    notes = note_items(get_section(secs, "速记")) if p else []
+    extra = extra_items(get_section(secs, "计划外")) if p else []
+    done = sum(1 for t in plan if t["done"])
+    print(f"\n今天已记: 计划 {len(plan)} 项（完成 {done}）· 计划外 {len(extra)} · 速记 {len(notes)}")
+    ai_text, _ = distill_status_text()
+    if ai_text:
+        print(f"{C_FAINT}{ai_text}{C_R}")
+    if not plan:
+        print(f"\n{C_DIM}还没排今天的计划。{C_R}prefix Space 打 {C_GREEN}+ 任务{C_R}{C_DIM} 就能加。{C_R}")
+    return 0
+
+
+def cmd_status(rest) -> int:
+    d = today()
+    p, pre, secs = load_day(d)
+    plan = plan_items(get_section(secs, "计划")) if p else []
+    extra = extra_items(get_section(secs, "计划外")) if p else []
+    notes = note_items(get_section(secs, "速记")) if p else []
+    done = sum(1 for t in plan if t["done"])
+    print(f"今天 {d:%Y-%m-%d} {WEEKDAYS[d.weekday()]}"
+          + ("  ·跨夜（挂钟已过 0 点，仍记在前一天）" if is_late_night() else ""))
+    print(f"  计划 {len(plan)} 项（完成 {done}）· 计划外 {len(extra)} · 速记 {len(notes)}")
+    st = load_distill_state()
+    if st.get("ts"):
+        flag = "失败" if st.get("ok") is False else "正常"
+        n = len(st.get("applied") or [])
+        print(f"  AI 整理: {st['ts'].replace('T', ' ')} {flag}"
+              + (f"，补了 {n} 条" if n else "，无变化")
+              + (f"（{st['error'][:60]}）" if st.get("error") else ""))
+    else:
+        print("  AI 整理: 还没有运行过")
+    if (ROOT / ".git").exists():
+        last = _git("log", "-1", "--pretty=%ad %s", "--date=format:%m-%d %H:%M").stdout.strip()
+        print(f"  最近写入: {last}")
+    return 0
+
+
 def cmd_list(rest) -> int:
-    """给 fzf 用：每行 `编号<TAB>○/✔ 文本`。--open 只看未完成。"""
+    """给 fzf 用：每行 `类型<TAB>序号<TAB>标记 文本`。p=计划 e=计划外。--open 只看未完成。"""
     only_open = "--open" in rest
-    d = date.today()
+    d = today()
     p, pre, secs = load_day(d)
     if not p:
         print("今天还没有文件。", file=sys.stderr)
         return 1
-    items = plan_items(get_section(secs, "计划"))
     n = 0
-    for i, t in enumerate(items, 1):
+    for i, t in enumerate(plan_items(get_section(secs, "计划")), 1):
         if only_open and t["done"]:
             continue
         mark = "✔" if t["done"] else "○"
-        tail = f"  ↺{t['carry']}" if (t["carry"] and not t["done"]) else ""
-        print(f"{i}\t{mark} {t['text']}{tail}")
+        tail = f"  [↺{t['carry']}]" if (t["carry"] and not t["done"]) else ""
+        print(f"p\t{i}\t{mark} {t['text']}{tail}")
+        n += 1
+    for i, e in enumerate(extra_items(get_section(secs, "计划外")), 1):
+        print(f"e\t{i}\t◆ {e['text']}")
         n += 1
     return 0 if n else 1
 
 
+def _edit_target(rest):
+    """解析 <序号> [--extra] [其他文本]"""
+    extra = "--extra" in rest
+    args = [a for a in rest if a != "--extra"]
+    if not args or not args[0].isdigit():
+        return None, None, extra
+    return int(args[0]), " ".join(args[1:]).strip(), extra
+
+
+def cmd_rm(rest) -> int:
+    idx, _, extra = _edit_target(rest)
+    if not idx:
+        print("用法: j rm <序号> [--extra]", file=sys.stderr)
+        return 1
+    d = today()
+    with Lock():
+        p, pre, secs = load_day(d)
+        if not p:
+            print("今天还没有文件。", file=sys.stderr)
+            return 1
+        name = "计划外" if extra else "计划"
+        body = get_section(secs, name)
+        items = extra_items(body) if extra else plan_items(body)
+        if not (1 <= idx <= len(items)):
+            print(f"{name}里没有第 {idx} 项。", file=sys.stderr)
+            return 1
+        if extra:
+            removed = items[idx - 1]["text"]
+            body.pop(items[idx - 1]["line"])
+        else:
+            t = items[idx - 1]
+            removed = t["text"]
+            body.pop(t["line"])
+        save_day(d, pre, secs, f"rm {d}: {name} {removed[:50]}")
+    print(f"删除: {removed}")
+    return 0
+
+
+def cmd_rename(rest) -> int:
+    idx, newtext, extra = _edit_target(rest)
+    if not idx:
+        print("用法: j rename <序号> [新名字] [--extra]", file=sys.stderr)
+        return 1
+    d = today()
+    p, pre, secs = load_day(d)
+    if not p:
+        print("今天还没有文件。", file=sys.stderr)
+        return 1
+    name = "计划外" if extra else "计划"
+    body = get_section(secs, name) or []
+    items = extra_items(body) if extra else plan_items(body)
+    if not (1 <= idx <= len(items)):
+        print(f"{name}里没有第 {idx} 项。", file=sys.stderr)
+        return 1
+    old = items[idx - 1]["text"]
+    if not newtext:
+        try:
+            newtext = input(f"新名字（原「{old}」）: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return 1
+    if not newtext:
+        print("没输入名字，什么都没改。", file=sys.stderr)
+        return 1
+    with Lock():
+        p, pre, secs = load_day(d)
+        body = get_section(secs, name)
+        items = extra_items(body) if extra else plan_items(body)
+        if extra:
+            body[items[idx - 1]["line"]] = f"- {items[idx-1]['time']} {newtext}".replace("  ", " ")
+        else:
+            t = items[idx - 1]
+            body[t["line"]] = render_task(newtext, t["carry"], t["done"])
+        save_day(d, pre, secs, f"rename {d}: {old[:30]} -> {newtext[:30]}")
+    print(f"{old} → {newtext}")
+    return 0
+
+
+def cmd_promote(rest) -> int:
+    idx, newtext, _ = _edit_target(rest)
+    if not idx:
+        print("用法: j promote <计划外序号> [新任务文本]", file=sys.stderr)
+        return 1
+    d = today()
+    p, pre, secs = load_day(d)
+    if not p:
+        print("今天还没有文件。", file=sys.stderr)
+        return 1
+    body = get_section(secs, "计划外") or []
+    items = extra_items(body)
+    if not (1 <= idx <= len(items)):
+        print(f"计划外没有第 {idx} 项。", file=sys.stderr)
+        return 1
+    src = items[idx - 1]["text"]
+    if not newtext:
+        try:
+            newtext = input(f"衍生出的待办（回车沿用「{src}」）: ").strip() or src
+        except (EOFError, KeyboardInterrupt):
+            return 1
+    with Lock():
+        p, pre, secs = load_day(d)
+        get_section(secs, "计划", create=True).append(render_task(newtext, 0, False))
+        save_day(d, pre, secs, f"promote {d}: {newtext[:50]}")
+    print(f"+ {newtext}（来自计划外: {src}）")
+    return 0
+
+
 def cmd_done(key: str) -> int:
-    d = date.today()
+    d = today()
     p, pre, secs = load_day(d)
     if not p:
         print("今天还没有文件。", file=sys.stderr)
@@ -729,7 +1088,7 @@ def daily_material(d: date, plan, notes, secs) -> str:
 
 
 def cmd_report(dry: bool) -> int:
-    d = date.today()
+    d = today()
     with Lock():
         ensure_today(d)
     p, pre, secs = load_day(d)
@@ -753,7 +1112,7 @@ def cmd_report(dry: bool) -> int:
     if dry:
         print(out)
         return 0
-    stamp = f"{datetime.now():%H:%M}"
+    stamp = f"{_now():%H:%M}"
     with Lock():
         p, pre, secs = load_day(d)
         secs = [(n, b) for n, b in secs if n != f"总结 · {stamp}"]
@@ -775,12 +1134,10 @@ def collect_month(ym: str):
     return start, end, days
 
 
-def month_material(ym: str) -> str:
-    start, end, days = collect_month(ym)
+def period_material(days, title: str, since: str, until: str) -> str:
+    """把一段时间（月 / 周）的材料拼给模型。days: [(date, path)]"""
     total = done = nsum = nextra = 0
-    per_day_done = []
-    delay = {}
-    body = []
+    per_day_done, delay, body = [], {}, []
     for dd, p in days:
         _, secs = split_sections(p.read_text(encoding="utf-8"))
         plan = plan_items(get_section(secs, "计划"))
@@ -810,7 +1167,7 @@ def month_material(ym: str) -> str:
 
     top_delay = sorted(delay.items(), key=lambda kv: -kv[1])[:6]
     head = [
-        f"月份: {ym}",
+        title,
         "",
         "统计（脚本算出，直接引用）:",
         f"- 有记录的天数: {len(days)}",
@@ -823,9 +1180,39 @@ def month_material(ym: str) -> str:
         head.append("- 拖延最久（结转天数）:")
         head += [f"  - {t} → {n} 天" for t, n in top_delay]
     head += ["", "每日记录:", ""]
-    mv = machine_view(f"{start} 00:00", f"{end} 23:59")
+    mv = machine_view(since, until)
     tail = ["", "机器证据:", mv] if mv else []
     return "\n".join(head) + "\n".join(body) + "\n".join(tail)
+
+
+def month_material(ym: str) -> str:
+    start, end, days = collect_month(ym)
+    return period_material(days, f"月份: {ym}", f"{start} 00:00", f"{end} 23:59")
+
+
+def collect_week(arg: str | None):
+    """arg: 2026-W45 或空（取逻辑今天所在的那一周，周一开始）"""
+    if arg:
+        m = re.match(r"^(\d{4})-?W(\d{1,2})$", arg.strip(), re.I)
+        if not m:
+            raise ValueError("周报参数要写成 2026-W45")
+        d = date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
+    else:
+        t = today()
+        d = t - timedelta(days=t.weekday())
+    start = d
+    end = d + timedelta(days=6)
+    days = [(dd, p) for dd, p in all_days() if start <= dd <= end]
+    return start, end, days
+
+
+def week_material(arg: str | None) -> str:
+    start, end, days = collect_week(arg)
+    iso = start.isocalendar()
+    return period_material(
+        days, f"周: {iso[0]}-W{iso[1]:02d}（{start:%m-%d} ~ {end:%m-%d}）",
+        f"{start} 00:00", f"{end} 23:59",
+    )
 
 
 def day_notes(d: date):
@@ -870,7 +1257,7 @@ def cmd_log(rest) -> int:
                   else f"{dd:%Y-%m-%d} {n['time']}  {n['text']}")
         return 0
 
-    items = day_notes(date.today())
+    items = day_notes(today())
     if not items:
         print("今天还没有速记。j \"<一句话>\" 记一笔。", file=sys.stderr)
         return 0
@@ -880,20 +1267,30 @@ def cmd_log(rest) -> int:
 
 
 def cmd_search(words: str) -> int:
-    """跨天搜速记内容，多个词是 AND。"""
+    """跨天搜索：速记、计划项、计划外都搜。多个词是 AND。"""
     if not words.strip():
         print("用法: j search <关键词> [关键词...]", file=sys.stderr)
         return 1
     keys = [w.lower() for w in words.split()]
     hit = 0
     for dd, _ in all_days():
-        for n in day_notes(dd):
-            low = n["text"].lower()
+        _, _, secs = load_day(dd)
+        if secs is None:
+            continue
+        rows = []
+        for n in note_items(get_section(secs, "速记")):
+            rows.append((f"{n['time']}", "速记  ", n["text"]))
+        for t in plan_items(get_section(secs, "计划")):
+            rows.append(("", "计划  ", f"[{'x' if t['done'] else ' '}] {t['text']}"))
+        for e in extra_items(get_section(secs, "计划外")):
+            rows.append((e["time"], "计划外", e["text"]))
+        for when, kind, text in rows:
+            low = text.lower()
             if all(k in low for k in keys):
                 hit += 1
-                print(f"{dd:%Y-%m-%d} {n['time']}  {n['text']}")
+                print(f"{dd:%Y-%m-%d} {kind} {when:>5}  {text}")
     if not hit:
-        print(f"没找到含「{words}」的速记。", file=sys.stderr)
+        print(f"没找到含「{words}」的记录。", file=sys.stderr)
         return 1
     print(f"\n—— {hit} 条", file=sys.stderr)
     return 0
@@ -909,7 +1306,7 @@ def cmd_notes() -> int:
 
 def cmd_day(arg: str | None) -> int:
     if not arg:
-        arg = f"{date.today():%Y-%m-%d}"
+        arg = f"{today():%Y-%m-%d}"
     try:
         d = datetime.strptime(arg, "%Y-%m-%d").date()
     except ValueError:
@@ -923,8 +1320,41 @@ def cmd_day(arg: str | None) -> int:
     return 0
 
 
+def cmd_week(arg: str | None, dry: bool) -> int:
+    try:
+        start, end, days = collect_week(arg)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    iso = start.isocalendar()
+    key = f"{iso[0]}-W{iso[1]:02d}"
+    if not days:
+        print(f"{key}（{start:%m-%d} ~ {end:%m-%d}）没有任何记录。", file=sys.stderr)
+        return 1
+    print(f"生成 {key} 周报中（{len(days)} 天记录）…", file=sys.stderr)
+    try:
+        out = pi_call("week.md", week_material(arg), CFG["J_MODEL_REPORT"], timeout=600,
+                      thinking=CFG.get("J_THINK_REPORT", "low"))
+    except Exception as e:
+        print(f"失败：{e}", file=sys.stderr)
+        return 1
+    out = out.strip()
+    if not out:
+        print("模型返回空。", file=sys.stderr)
+        return 1
+    if not dry:
+        rp = ROOT / "reports" / f"{key}.md"
+        rp.parent.mkdir(parents=True, exist_ok=True)
+        rp.write_text(f"# {key} 周报\n\n> {start:%Y-%m-%d} ~ {end:%Y-%m-%d}"
+                      f" · 生成于 {_now():%Y-%m-%d %H:%M}\n\n{out}\n", encoding="utf-8")
+        git_commit(f"week report {key}")
+        print(f"已写入 {rp}", file=sys.stderr)
+    print(out)
+    return 0
+
+
 def cmd_month(ym: str | None, dry: bool) -> int:
-    ym = ym or f"{date.today():%Y-%m}"
+    ym = ym or f"{today():%Y-%m}"
     if not re.match(r"^\d{4}-\d{2}$", ym):
         print("用法: j month [YYYY-MM]", file=sys.stderr)
         return 1
@@ -947,7 +1377,7 @@ def cmd_month(ym: str | None, dry: bool) -> int:
         rp = ROOT / "reports" / f"{ym}.md"
         rp.parent.mkdir(parents=True, exist_ok=True)
         rp.write_text(
-            f"# {ym} 月报\n\n> 生成于 {datetime.now():%Y-%m-%d %H:%M}\n\n{out}\n",
+            f"# {ym} 月报\n\n> 生成于 {_now():%Y-%m-%d %H:%M}\n\n{out}\n",
             encoding="utf-8",
         )
         git_commit(f"month report {ym}")
@@ -996,7 +1426,7 @@ def pad(s: str, width: int) -> str:
 
 
 def board_state(d: date | None = None):
-    d = d or date.today()
+    d = d or today()
     st = {
         "date": d,
         "exists": False,
@@ -1052,7 +1482,7 @@ def clock_anchor(w: int):
 
 
 def clock_text() -> str:
-    return datetime.now().strftime(CLOCK_FMT)
+    return _now().strftime(CLOCK_FMT)
 
 
 def rule(w: int) -> str:
@@ -1067,6 +1497,8 @@ def build_frame(w: int, h: int):
     done = sum(1 for t in st["plan"] if t["done"])
     total = len(st["plan"])
     head = f"{d:%m-%d} {WEEKDAYS[d.weekday()]}"
+    if d == today() and is_late_night():
+        head += " ·跨夜"   # 挂钟已经过了 0 点，但记录仍算在前一天
     cnt = f"{done}/{total}" if total else ""
     if st["extra"]:
         cnt = f"{cnt} +{len(st['extra'])}" if cnt else f"+{len(st['extra'])}"
@@ -1116,7 +1548,12 @@ def build_frame(w: int, h: int):
     meta = f"{st['notes']} 条速记"
     if st["summaries"]:
         meta += f" · 总结 {len(st['summaries'])} 次 ({st['summaries'][-1]})"
-    lines.append(f" {C_DIM}{cut(meta, w - 2)}{C_R}")
+    ai_text, ai_color = distill_status_text()
+    if ai_text and w - 2 - dw(meta) - dw(ai_text) >= 2:
+        gap = w - 2 - dw(meta) - dw(ai_text)
+        lines.append(f" {C_DIM}{meta}{C_R}{' ' * gap}{ai_color}{ai_text}{C_R}")
+    else:
+        lines.append(f" {C_DIM}{cut(meta, w - 2)}{C_R}")
     if st["last_note"]:
         lines.append(f" {C_FAINT}{cut(st['last_note'], w - 2)}{C_R}")
 
@@ -1195,13 +1632,14 @@ def cmd_board(once: bool) -> int:
             return
         drawn["sec"] = now
         row, col = anchor
+        color = C_YEL if is_late_night() else C_DIM
         # 写满最后一列会让光标进入“待折行”状态，末尾回一次原点清掉
-        out.write("\033[%d;%dH%s%s%s\033[H" % (row, col, C_DIM, now, C_R))
+        out.write("\033[%d;%dH%s%s%s\033[H" % (row, col, color, now, C_R))
         out.flush()
 
     try:
         while True:
-            d = date.today()
+            d = today()
             p = day_path(d)
             try:
                 sig = (p.stat().st_mtime_ns, p.parent.stat().st_mtime_ns)
@@ -1247,14 +1685,22 @@ HELP = f"""j — 个人日志 / 日报
   j done                  列出今日计划（带编号）
   j done <编号|关键字>    切换完成状态（就是改 todo 状态的方式）
   j list [--open]         列成 fzf 能吃的格式（给 j-toggle 用）
+  j rm <序号> [--extra]   删掉一项
+  j rename <序号> [新名]  改一项的文字
+  j promote <序号> [文本] 从「计划外」衍生一条待办
   j log [-n N]            今天的速记（默认最近 10 条）
   j log -a [YYYY-MM]      跨天看速记
   j search <词>...        跨天搜速记（多个词是 AND）
   j day [YYYY-MM-DD]      打印某一天整篇
+  j undo [n] [--dry]      撤销最近 n 次写入（默认 1 次）
+  j status                今天概况 + AI 整理状态
+  j backup [--push]       给数据做个 git bundle 快照（可顺带推私有远端）
+  j start                 开工视图：上次没做完的 + 今天的现状
   j show                  打印今天整篇
   j edit                  用 $EDITOR 打开今天
   j report [--dry]        生成今日总结（可一天多次）
   j month [YYYY-MM]       生成月报
+  j week [2026-W45]       生成周报（默认本周）
   j board                 渲染看板（j-board 调用）
   j path                  今天文件路径
   j distill               立刻跑一次计划整理
@@ -1278,26 +1724,43 @@ def main(argv) -> int:
         return cmd_done(" ".join(rest))
     if cmd in ("list", "ls"):
         return cmd_list(rest)
+    if cmd == "undo":
+        return cmd_undo(rest)
+    if cmd in ("status", "st"):
+        return cmd_status(rest)
+    if cmd in ("start", "begin"):
+        return cmd_start(rest)
+    if cmd == "backup":
+        return cmd_backup(rest)
+    if cmd == "rm":
+        return cmd_rm(rest)
+    if cmd == "rename":
+        return cmd_rename(rest)
+    if cmd == "promote":
+        return cmd_promote(rest)
     if cmd == "report":
         return cmd_report(dry="--dry" in rest)
     if cmd == "month":
         args = [a for a in rest if not a.startswith("-")]
         return cmd_month(args[0] if args else None, dry="--dry" in rest)
+    if cmd == "week":
+        args = [a for a in rest if not a.startswith("-")]
+        return cmd_week(args[0] if args else None, dry="--dry" in rest)
     if cmd == "board":
         return cmd_board(once="--once" in rest)
     if cmd == "path":
-        ensure_today(date.today())
-        print(day_path(date.today()))
+        ensure_today(today())
+        print(day_path(today()))
         return 0
     if cmd == "show":
-        p, _, _ = load_day(date.today())
+        p, _, _ = load_day(today())
         if p:
             print(p.read_text(encoding="utf-8"), end="")
         else:
             print("今天还没有记录。", file=sys.stderr)
         return 0
     if cmd == "edit":
-        p = ensure_today(date.today())
+        p = ensure_today(today())
         return subprocess.call([os.environ.get("EDITOR", "nvim"), str(p)])
     if cmd == "log":
         return cmd_log(rest)
@@ -1309,7 +1772,7 @@ def main(argv) -> int:
         return cmd_day(rest[0] if rest else None)
     if cmd in ("rollover", "new"):
         with Lock():
-            p = ensure_today(date.today())
+            p = ensure_today(today())
         print(p)
         return 0
 
