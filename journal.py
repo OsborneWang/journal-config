@@ -66,7 +66,9 @@ ROOT = Path(CFG["JOURNAL_DIR"])
 
 SECTION_RE = re.compile(r"^##\s+(.*?)\s*$")
 TASK_RE = re.compile(r"^\s*- \[([ xX])\]\s*(.*?)\s*$")
-CARRY_RE = re.compile(r"\s*↺(\d+)\s*$")
+# 结转标记只认 "[↺3]" 这一种（方括号包住，正文不可能撞上）。
+# 早期用过的 " ↺3" 裸格式已废弃：它会把正文末尾的「↺3」误当成结转次数。
+CARRY_RE = re.compile(r"\s*\[↺(\d+)\]\s*$")
 NOTE_RE = re.compile(r"^\s*- (\d{1,2}:\d{2})\s+(.*)$")
 
 
@@ -139,7 +141,7 @@ def get_section(sections, name, create=False):
 
 
 def render_task(text, carry, done) -> str:
-    return "- [%s] %s%s" % ("x" if done else " ", text, (" ↺%d" % carry if carry else ""))
+    return "- [%s] %s%s" % ("x" if done else " ", text, (" [↺%d]" % carry if carry else ""))
 
 
 def parse_task(line):
@@ -733,7 +735,8 @@ def cmd_report(dry: bool) -> int:
     p, pre, secs = load_day(d)
     plan = plan_items(get_section(secs, "计划"))
     notes = note_items(get_section(secs, "速记"))
-    if not plan and not notes:
+    extra = extra_items(get_section(secs, "计划外"))
+    if not plan and not notes and not extra:
         print("今天还没有任何记录，先记一笔再来。", file=sys.stderr)
         return 1
     print("生成中…", file=sys.stderr)

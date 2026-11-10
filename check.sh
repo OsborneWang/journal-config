@@ -57,6 +57,7 @@ head2 "4. 端到端（临时目录，不碰真实数据）"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 git -C "$tmp" init -q
 export JOURNAL_DIR="$tmp"
+export REPO="$repo_dir"
 J="$home_bin/j"
 
 "$J" "+ 测试计划项" >/dev/null 2>&1 && ok "加计划项" || bad "加计划项"
@@ -73,6 +74,9 @@ out=$(COLUMNS=54 LINES=24 "$J" board --once 2>&1)
 echo "$out" | grep -q "速记" && ok "看板渲染" || bad "看板渲染"
 echo "$out" | grep -q "◆"    && ok "看板显示计划外 ◆" || bad "看板没显示 ◆"
 if echo "$out" | grep -q "↺"; then ok "看板显示结转 ↺"; else echo "  · 跳过结转显示（这个临时场景里没有结转项）"; fi
+
+head2 "4b. 结转标记（回归）"
+python3 -c "import sys,os; sys.path.insert(0, os.environ['REPO']); import journal as J; assert J.parse_task('- [ ] 正文末尾 ↺3')['carry']==0; assert J.parse_task('- [ ] 任务 [↺4]')['carry']==4; assert J.render_task('任务',4,False)=='- [ ] 任务 [↺4]'; assert J.render_task('任务',0,True)=='- [x] 任务'" && ok "正文里的 ↺3 不吃正文、[↺n] 正常" || bad "结转标记解析"
 
 head2 "5. 模型（可选）"
 if [ "$with_model" = 1 ]; then
